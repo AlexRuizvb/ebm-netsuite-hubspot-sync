@@ -230,17 +230,17 @@ async function hubspotRequest(method, endpoint, body = null) {
   });
 }
 
-async function searchCompanyByName(name) {
+async function searchCompanyByNetSuiteId(netsuiteId) {
   const searchBody = {
     filterGroups: [{
       filters: [{
-        propertyName: 'name',
-        operator: 'CONTAINS_TOKEN',
-        value: name.split(' ')[0] // Search by first word
+        propertyName: 'netsuite_customer_id',
+        operator: 'EQ',
+        value: netsuiteId.toString()
       }]
     }],
-    properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount'],
-    limit: 10
+    properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount', 'netsuite_legal_name'],
+    limit: 1
   };
   
   const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
@@ -266,26 +266,24 @@ async function syncARData() {
   
   for (const customer of arData) {
     try {
-      // Search for matching company in HubSpot
-      const companies = await searchCompanyByName(customer.customer_name);
+      // Search for matching company in HubSpot by NetSuite ID
+      const companies = await searchCompanyByNetSuiteId(customer.customer_id);
       
       if (companies.length > 0) {
-        // Find best match
-        const match = companies.find(c => 
-          c.properties.name.toLowerCase().includes(customer.customer_name.toLowerCase().split(' ')[0])
-        ) || companies[0];
+        const match = companies[0];
         
-        // Update the company
+        // Update the company with AR data and legal name from NetSuite
         await updateCompany(match.id, {
           netsuite_customer_id: customer.customer_id.toString(),
+          netsuite_legal_name: customer.customer_name, // Exact name from NetSuite for insurance
           total_ar_balance: Math.round(customer.total_ar_balance * 100) / 100,
           past_due_amount: Math.round(customer.past_due_amount * 100) / 100
         });
         
-        console.log(`✓ Updated: ${customer.customer_name} → ${match.properties.name}`);
+        console.log(`✓ Updated: ${match.properties.name} (NS: ${customer.customer_name}) - AR: $${customer.total_ar_balance}`);
         updated++;
       } else {
-        console.log(`✗ Not found in HubSpot: ${customer.customer_name}`);
+        console.log(`✗ No HubSpot company with netsuite_customer_id=${customer.customer_id}: ${customer.customer_name}`);
         notFound++;
       }
       
