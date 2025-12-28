@@ -1,0 +1,14 @@
+{
+  "name": "ebm-netsuite-hubspot-sync",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Sync AR data from NetSuite to HubSpot for EBM",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "sync": "SYNC_ON_START=true node src/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

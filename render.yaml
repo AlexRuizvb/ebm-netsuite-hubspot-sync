@@ -1,0 +1,43 @@
+# Render Blueprint
+services:
+  - type: web
+    name: ebm-netsuite-hubspot-sync
+    env: node
+    plan: free
+    buildCommand: ""
+    startCommand: node src/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NETSUITE_ACCOUNT_ID
+        value: 7882010
+      - key: NETSUITE_CONSUMER_KEY
+        sync: false
+      - key: NETSUITE_CONSUMER_SECRET
+        sync: false
+      - key: NETSUITE_TOKEN_ID
+        sync: false
+      - key: NETSUITE_TOKEN_SECRET
+        sync: false
+      - key: HUBSPOT_ACCESS_TOKEN
+        sync: false
+
+# Cron job for daily sync at 6 AM EST (11 AM UTC)
+  - type: cron
+    name: ebm-ar-sync-daily
+    env: node
+    schedule: "0 11 * * *"
+    buildCommand: ""
+    startCommand: node -e "import('./src/index.js').then(m => m.syncARData())"
+    envVars:
+      - key: NETSUITE_ACCOUNT_ID
+        value: 7882010
+      - key: NETSUITE_CONSUMER_KEY
+        sync: false
+      - key: NETSUITE_CONSUMER_SECRET
+        sync: false
+      - key: NETSUITE_TOKEN_ID
+        sync: false
+      - key: NETSUITE_TOKEN_SECRET
+        sync: false
+      - key: HUBSPOT_ACCESS_TOKEN
+        sync: false
