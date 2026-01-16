@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+iasync function hubspotRequestgmport crypto from 'crypto';
 import https from 'https';
 
 // ============ CONFIGURATION ============
@@ -12,9 +12,69 @@ const config = {
   },
   hubspot: {
     accessToken: process.env.HUBSPOT_ACCESS_TOKEN,
-  }
-};
+// ============ HUBSPOT API CALLS
 
+    async function hubspotRequest(method, endpoint, body = null) {
+        // Validate access token
+        if (!config.hubspot.accessToken) {
+              throw new Error('HUBSPOT_ACCESS_TOKEN environment variable not set');
+        }
+
+        const url = `https://api.hubapi.com${endpoint}`;
+
+        const options = {
+              method,
+              headers: {
+                      'Authorization': `Bearer ${config.hubspot.accessToken}`,
+                      'Content-Type': 'application/json'
+              }
+        };
+
+        return new Promise((resolve, reject) => {
+              const req = https.request(url, options, (res) => {
+                      let data = '';
+                      res.on('data', chunk => data += chunk);
+                      res.on('end', () => {
+                                console.log(`HubSpot response status: ${res.statusCode} - ${endpoint}`);
+                                try {
+                                            const parsed = JSON.parse(data);
+
+                                            // Check for API error in response body
+                                            if (parsed.status === 'error') {
+                                                          const errorMsg = `HubSpot API Error: ${parsed.message || 'Unknown error'}`;
+                                                          console.error(errorMsg);
+                                                          console.error('Full response:', JSON.stringify(parsed, null, 2));
+                                                          reject(new Error(errorMsg));
+                                                          return;
+                                            }
+
+                                            // Check for HTTP error status
+                                            if (res.statusCode >= 400) {
+                                                          const errorMsg = `HubSpot API HTTP ${res.statusCode}: ${parsed.message || JSON.stringify(parsed)}`;
+                                                          console.error(errorMsg);
+                                                          reject(new Error(errorMsg));
+                                                          return;
+                                            }
+
+                                            resolve(parsed);
+                                } catch (e) {
+                                            const errorMsg = `HubSpot API response parse error: ${e.message}`;
+                                            console.error(errorMsg);
+                                            console.error('Raw response:', data.substring(0, 500));
+                                            reject(new Error(errorMsg));
+                                }
+                      });
+              });
+
+              req.on('error', (err) => {
+                      console.error('HubSpot request error:', err.message);
+                      reject(err);
+              });
+
+              if (body) req.write(JSON.stringify(body));
+              req.end();
+        });
+    }
 // ============ NETSUITE OAUTH 1.0 ============
 function generateNonce() {
   return crypto.randomBytes(16).toString('hex');
