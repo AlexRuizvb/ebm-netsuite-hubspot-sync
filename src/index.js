@@ -230,78 +230,128 @@ async function hubspotRequest(method, endpoint, body = null) {
   });
 }
 
+// NEW: Search by NetSuite customer ID (primary match)
 async function searchCompanyByNetSuiteId(netsuiteId) {
-  const searchBody = {
-    filterGroups: [{
-      filters: [{
-        propertyName: 'netsuite_customer_id',
-        operator: 'EQ',
-        value: netsuiteId.toString()
-      }]
-    }],
-    properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount', 'netsuite_legal_name'],
-    limit: 1
-  };
-  
-  const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
-  return result.results || [];
+    const searchBody = {
+          filterGroups: [{
+                  filters: [{
+                            propertyName: 'netsuite_customer_id',
+                            operator: 'EQ',
+                            value: netsuiteId.toString()
+                  }]
+          }],
+          properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount', 'netsuite_legal_name'],
+          limit: 1
+    };
+    const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
+    return result.results || [];
 }
 
+// NEW: Search by company name (fallback match)
+async function searchCompanyByName(companyName) {
+    const searchBody = {
+          filterGroups: [{
+                  filters: [{
+                            propertyName: 'name',
+                            operator: 'EQ',
+                            value: companyName
+                  }]
+          }],
+          properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount'],
+          limit: 1
+    };
+    const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
+    return result.results || [];
+}
+
+// NEW: Create new company in HubSpot
+async function createCompany(properties) {
+    return hubspotRequest('POST', '/crm/v3/objects/companies', { properties });
+}
+
+// NEW: Update existing company
 async function updateCompany(companyId, properties) {
-  return hubspotRequest('PATCH', `/crm/v3/objects/companies/${companyId}`, { properties });
+    return hubspotRequest('PATCH', `/crm/v3/objects/companies/${companyId}`, { properties });
+}
+
+// NEW: Find existing company with intelligent fallback logic
+async function findExistingCompany(netsuiteId, companyName) {
+    // Step 1: Search by NetSuite customer ID (most reliable)
+    const byIdResults = await searchCompanyByNetSuiteId(netsuiteId);
+    if (byIdResults.length > 0) {
+          console.log(`  → Found by netsuite_customer_id: ${byIdResults[0].properties.name}`);
+          return { company: byIdResults[0], matchType: 'netsuite_id' };
+    }
+
+    // Step 2: Search by company name (fallback)
+    const byNameResults = await searchCompanyByName(companyName);
+    if (byNameResults.length > 0) {
+          console.log(`  → Found by name match: ${byNameResults[0].properties.name}`);
+          return { company: byNameResults[0], matchType: 'name' };
+    }
+
+    // Step 3: No match found
+    console.log(`  → No existing company found (will create new)`);
+    return { company: null, matchType: 'none' };
 }
 
 // ============ SYNC LOGIC ============
+// ============ SYNC LOGIC ============
 async function syncARData() {
-  console.log('Starting AR sync:', new Date().toISOString());
-  
-  // Get AR data from NetSuite
-  console.log('Fetching AR data from NetSuite...');
-  const arData = await getARData();
-  console.log(`Found ${arData.length} customers with AR balances`);
-  
-  let updated = 0;
-  let notFound = 0;
-  let errors = 0;
-  
-  for (const customer of arData) {
-    try {
-      // Search for matching company in HubSpot by NetSuite ID
-      const companies = await searchCompanyByNetSuiteId(customer.customer_id);
-      
-      if (companies.length > 0) {
-        const match = companies[0];
-        
-        // Update the company with AR data and legal name from NetSuite
-        await updateCompany(match.id, {
-          netsuite_customer_id: customer.customer_id.toString(),
-          netsuite_legal_name: customer.customer_name, // Exact name from NetSuite for insurance
-          total_ar_balance: Math.round(customer.total_ar_balance * 100) / 100,
-          past_due_amount: Math.round(customer.past_due_amount * 100) / 100
-        });
-        
-        console.log(`✓ Updated: ${match.properties.name} (NS: ${customer.customer_name}) - AR: $${customer.total_ar_balance}`);
-        updated++;
-      } else {
-        console.log(`✗ No HubSpot company with netsuite_customer_id=${customer.customer_id}: ${customer.customer_name}`);
-        notFound++;
-      }
-      
-      // Rate limit delay
-      await new Promise(r => setTimeout(r, 100));
-      
-    } catch (err) {
-      console.error(`Error processing ${customer.customer_name}:`, err.message);
-      errors++;
+    console.log('Starting AR sync:', new Date().toISOString());
+
+    // Get AR data from NetSuite
+    console.log('Fetching AR data from NetSuite...');
+    const arData = await getARData();
+    console.log(`Found ${arData.length} customers with AR balances`);
+
+    let updated = 0;
+    let created = 0;
+    let errors = 0;
+
+    for (const customer of arData) {
+          try {
+                  console.log(`\nProcessing: ${customer.customer_name} (NS ID: ${customer.customer_id})`);
+
+                  // Find existing company with intelligent fallback
+                  const { company, matchType } = await findExistingCompany(
+                            customer.customer_id, 
+                            customer.customer_name
+                          );
+
+                  const properties = {
+                            netsuite_customer_id: customer.customer_id.toString(),
+                            netsuite_legal_name: customer.customer_name,
+                            total_ar_balance: Math.round(customer.total_ar_balance * 100) / 100,
+                            past_due_amount: Math.round(customer.past_due_amount * 100) / 100
+                  };
+
+                  if (company) {
+                            // UPDATE existing company
+                            await updateCompany(company.id, properties);
+                            console.log(`  ✓ UPDATED (${matchType}): AR Balance: $${customer.total_ar_balance}`);
+                            updated++;
+                  } else {
+                            // CREATE new company
+                            properties.name = customer.customer_name;
+                            const newCompany = await createCompany(properties);
+                            console.log(`  ✓ CREATED: New HubSpot ID ${newCompany.id} - AR Balance: $${customer.total_ar_balance}`);
+                            created++;
+                  }
+
+                  // Rate limit delay
+                  await new Promise(r => setTimeout(r, 100));
+          } catch (err) {
+                  console.error(`  ✗ ERROR processing ${customer.customer_name}:`, err.message);
+                  errors++;
+          }
     }
-  }
-  
-  console.log('\n=== Sync Complete ===');
-  console.log(`Updated: ${updated}`);
-  console.log(`Not found: ${notFound}`);
-  console.log(`Errors: ${errors}`);
-  
-  return { updated, notFound, errors };
+
+    console.log('\n=== Sync Complete ===');
+    console.log(`Updated: ${updated}`);
+    console.log(`Created: ${created}`);
+    console.log(`Errors: ${errors}`);
+    return { updated, created, errors };
 }
 
 // ============ WEB SERVER FOR RENDER ============
