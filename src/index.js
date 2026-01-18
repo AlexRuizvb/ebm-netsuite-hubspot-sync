@@ -1,5 +1,6 @@
-iasync function hubspotRequestgmport crypto from 'crypto';
+import crypto from 'crypto';
 import https from 'https';
+import http from 'http';
 
 // ============ CONFIGURATION ============
 const config = {
@@ -12,69 +13,9 @@ const config = {
   },
   hubspot: {
     accessToken: process.env.HUBSPOT_ACCESS_TOKEN,
-// ============ HUBSPOT API CALLS
+  }
+};
 
-    async function hubspotRequest(method, endpoint, body = null) {
-        // Validate access token
-        if (!config.hubspot.accessToken) {
-              throw new Error('HUBSPOT_ACCESS_TOKEN environment variable not set');
-        }
-
-        const url = `https://api.hubapi.com${endpoint}`;
-
-        const options = {
-              method,
-              headers: {
-                      'Authorization': `Bearer ${config.hubspot.accessToken}`,
-                      'Content-Type': 'application/json'
-              }
-        };
-
-        return new Promise((resolve, reject) => {
-              const req = https.request(url, options, (res) => {
-                      let data = '';
-                      res.on('data', chunk => data += chunk);
-                      res.on('end', () => {
-                                console.log(`HubSpot response status: ${res.statusCode} - ${endpoint}`);
-                                try {
-                                            const parsed = JSON.parse(data);
-
-                                            // Check for API error in response body
-                                            if (parsed.status === 'error') {
-                                                          const errorMsg = `HubSpot API Error: ${parsed.message || 'Unknown error'}`;
-                                                          console.error(errorMsg);
-                                                          console.error('Full response:', JSON.stringify(parsed, null, 2));
-                                                          reject(new Error(errorMsg));
-                                                          return;
-                                            }
-
-                                            // Check for HTTP error status
-                                            if (res.statusCode >= 400) {
-                                                          const errorMsg = `HubSpot API HTTP ${res.statusCode}: ${parsed.message || JSON.stringify(parsed)}`;
-                                                          console.error(errorMsg);
-                                                          reject(new Error(errorMsg));
-                                                          return;
-                                            }
-
-                                            resolve(parsed);
-                                } catch (e) {
-                                            const errorMsg = `HubSpot API response parse error: ${e.message}`;
-                                            console.error(errorMsg);
-                                            console.error('Raw response:', data.substring(0, 500));
-                                            reject(new Error(errorMsg));
-                                }
-                      });
-              });
-
-              req.on('error', (err) => {
-                      console.error('HubSpot request error:', err.message);
-                      reject(err);
-              });
-
-              if (body) req.write(JSON.stringify(body));
-              req.end();
-        });
-    }
 // ============ NETSUITE OAUTH 1.0 ============
 function generateNonce() {
   return crypto.randomBytes(16).toString('hex');
@@ -94,18 +35,18 @@ function percentEncode(str) {
 }
 
 function generateSignature(method, url, params, consumerSecret, tokenSecret) {
-  const sortedParams = Object.keys(params).sort().map(key => 
+  const sortedParams = Object.keys(params).sort().map(key =>
     `${percentEncode(key)}=${percentEncode(params[key])}`
   ).join('&');
-  
+
   const signatureBase = [
     method.toUpperCase(),
     percentEncode(url),
     percentEncode(sortedParams)
   ].join('&');
-  
+
   const signingKey = `${percentEncode(consumerSecret)}&${percentEncode(tokenSecret)}`;
-  
+
   return crypto.createHmac('sha256', signingKey)
     .update(signatureBase)
     .digest('base64');
@@ -114,7 +55,7 @@ function generateSignature(method, url, params, consumerSecret, tokenSecret) {
 function generateAuthHeader(method, url, consumerKey, consumerSecret, tokenId, tokenSecret, realm) {
   const nonce = generateNonce();
   const timestamp = generateTimestamp();
-  
+
   const params = {
     oauth_consumer_key: consumerKey,
     oauth_token: tokenId,
@@ -123,13 +64,13 @@ function generateAuthHeader(method, url, consumerKey, consumerSecret, tokenId, t
     oauth_nonce: nonce,
     oauth_version: '1.0'
   };
-  
+
   const signature = generateSignature(method, url, params, consumerSecret, tokenSecret);
   params.oauth_signature = signature;
-  
+
   const authHeader = 'OAuth realm="' + realm + '", ' +
     Object.keys(params).map(key => `${key}="${percentEncode(params[key])}"`).join(', ');
-  
+
   return authHeader;
 }
 
@@ -139,7 +80,7 @@ async function netsuiteRequest(method, endpoint, body = null) {
   const baseUrl = `https://${accountId}.suitetalk.api.netsuite.com`;
   const url = `${baseUrl}${endpoint}`;
   const realm = config.netsuite.accountId.toUpperCase();
-  
+
   const authHeader = generateAuthHeader(
     method,
     url,
@@ -149,7 +90,7 @@ async function netsuiteRequest(method, endpoint, body = null) {
     config.netsuite.tokenSecret,
     realm
   );
-  
+
   const options = {
     method,
     headers: {
@@ -158,7 +99,7 @@ async function netsuiteRequest(method, endpoint, body = null) {
       'Prefer': 'transient'
     }
   };
-  
+
   return new Promise((resolve, reject) => {
     const req = https.request(url, options, (res) => {
       let data = '';
@@ -187,9 +128,8 @@ async function netsuiteRequest(method, endpoint, body = null) {
 }
 
 async function getARData() {
-  // Use simpler SuiteQL query that should work with basic permissions
   const query = `
-    SELECT 
+    SELECT
       c.id AS customer_id,
       c.companyname AS customer_name,
       c.email
@@ -197,19 +137,18 @@ async function getARData() {
     WHERE c.isinactive = 'F'
     ORDER BY c.companyname
   `;
-  
+
   console.log('Attempting SuiteQL query for customers...');
   const result = await netsuiteRequest('POST', '/services/rest/query/v1/suiteql', { q: query });
-  
+
   if (result.items && result.items.length > 0) {
     console.log(`SuiteQL returned ${result.items.length} customers`);
     return result.items;
   }
-  
-  // If SuiteQL fails, try REST API for customers
+
   console.log('SuiteQL returned no results, trying REST API...');
   const restResult = await netsuiteRequest('GET', '/services/rest/record/v1/customer?limit=100');
-  
+
   if (restResult.items) {
     console.log(`REST API returned ${restResult.items.length} customers`);
     return restResult.items.map(c => ({
@@ -219,14 +158,12 @@ async function getARData() {
       past_due_amount: 0
     }));
   }
-  
-  // If nothing works, use hardcoded data from the earlier NetSuite report
+
   console.log('APIs returned no data, using cached AR data from NetSuite report...');
   return getHardcodedARData();
 }
 
 function getHardcodedARData() {
-  // AR data extracted from NetSuite report run on 2025-12-27
   return [
     { customer_id: '293', customer_name: 'CALLEJA, S.A DE C.V', total_ar_balance: 82346, past_due_amount: 82400 },
     { customer_id: '67', customer_name: 'DIST. LEOPHARMA', total_ar_balance: 71299, past_due_amount: 16804 },
@@ -262,8 +199,12 @@ function getHardcodedARData() {
 
 // ============ HUBSPOT API CALLS ============
 async function hubspotRequest(method, endpoint, body = null) {
+  if (!config.hubspot.accessToken) {
+    throw new Error('HUBSPOT_ACCESS_TOKEN environment variable not set');
+  }
+
   const url = `https://api.hubapi.com${endpoint}`;
-  
+
   const options = {
     method,
     headers: {
@@ -271,152 +212,177 @@ async function hubspotRequest(method, endpoint, body = null) {
       'Content-Type': 'application/json'
     }
   };
-  
+
   return new Promise((resolve, reject) => {
     const req = https.request(url, options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        console.log(`HubSpot ${method} ${endpoint} - Status: ${res.statusCode}`);
         try {
-          resolve(JSON.parse(data));
-        } catch {
-          resolve(data);
+          const parsed = JSON.parse(data);
+
+          // Check for error response
+          if (res.statusCode >= 400 || parsed.status === 'error') {
+            const errorMsg = parsed.message || JSON.stringify(parsed);
+            console.error(`HubSpot API Error: ${errorMsg}`);
+            if (parsed.validationResults) {
+              console.error('Validation errors:', JSON.stringify(parsed.validationResults, null, 2));
+            }
+            reject(new Error(`HubSpot ${res.statusCode}: ${errorMsg}`));
+            return;
+          }
+
+          resolve(parsed);
+        } catch (e) {
+          console.error('HubSpot response parse error:', e.message);
+          console.error('Raw response:', data.substring(0, 500));
+          reject(new Error(`Parse error: ${e.message}`));
         }
       });
     });
-    req.on('error', reject);
+
+    req.on('error', (err) => {
+      console.error('HubSpot request error:', err.message);
+      reject(err);
+    });
+
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
 }
 
-// NEW: Search by NetSuite customer ID (primary match)
 async function searchCompanyByNetSuiteId(netsuiteId) {
-    const searchBody = {
-          filterGroups: [{
-                  filters: [{
-                            propertyName: 'netsuite_customer_id',
-                            operator: 'EQ',
-                            value: netsuiteId.toString()
-                  }]
-          }],
-          properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount', 'netsuite_legal_name'],
-          limit: 1
-    };
-    const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
-    return result.results || [];
+  const searchBody = {
+    filterGroups: [{
+      filters: [{
+        propertyName: 'netsuite_customer_id',
+        operator: 'EQ',
+        value: netsuiteId.toString()
+      }]
+    }],
+    properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount', 'netsuite_legal_name'],
+    limit: 1
+  };
+  const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
+  return result.results || [];
 }
 
-// NEW: Search by company name (fallback match)
 async function searchCompanyByName(companyName) {
-    const searchBody = {
-          filterGroups: [{
-                  filters: [{
-                            propertyName: 'name',
-                            operator: 'EQ',
-                            value: companyName
-                  }]
-          }],
-          properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount'],
-          limit: 1
-    };
-    const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
-    return result.results || [];
+  const searchBody = {
+    filterGroups: [{
+      filters: [{
+        propertyName: 'name',
+        operator: 'EQ',
+        value: companyName
+      }]
+    }],
+    properties: ['name', 'netsuite_customer_id', 'total_ar_balance', 'past_due_amount'],
+    limit: 1
+  };
+  const result = await hubspotRequest('POST', '/crm/v3/objects/companies/search', searchBody);
+  return result.results || [];
 }
 
-// NEW: Create new company in HubSpot
 async function createCompany(properties) {
-    return hubspotRequest('POST', '/crm/v3/objects/companies', { properties });
+  return hubspotRequest('POST', '/crm/v3/objects/companies', { properties });
 }
 
-// NEW: Update existing company
 async function updateCompany(companyId, properties) {
-    return hubspotRequest('PATCH', `/crm/v3/objects/companies/${companyId}`, { properties });
+  return hubspotRequest('PATCH', `/crm/v3/objects/companies/${companyId}`, { properties });
 }
 
-// NEW: Find existing company with intelligent fallback logic
 async function findExistingCompany(netsuiteId, companyName) {
-    // Step 1: Search by NetSuite customer ID (most reliable)
-    const byIdResults = await searchCompanyByNetSuiteId(netsuiteId);
-    if (byIdResults.length > 0) {
-          console.log(`  → Found by netsuite_customer_id: ${byIdResults[0].properties.name}`);
-          return { company: byIdResults[0], matchType: 'netsuite_id' };
-    }
+  // Step 1: Search by NetSuite customer ID (most reliable)
+  const byIdResults = await searchCompanyByNetSuiteId(netsuiteId);
+  if (byIdResults.length > 0) {
+    console.log(`  → Found by netsuite_customer_id: ${byIdResults[0].properties.name}`);
+    return { company: byIdResults[0], matchType: 'netsuite_id' };
+  }
 
-    // Step 2: Search by company name (fallback)
-    const byNameResults = await searchCompanyByName(companyName);
-    if (byNameResults.length > 0) {
-          console.log(`  → Found by name match: ${byNameResults[0].properties.name}`);
-          return { company: byNameResults[0], matchType: 'name' };
-    }
+  // Step 2: Search by company name (fallback)
+  const byNameResults = await searchCompanyByName(companyName);
+  if (byNameResults.length > 0) {
+    console.log(`  → Found by name match: ${byNameResults[0].properties.name}`);
+    return { company: byNameResults[0], matchType: 'name' };
+  }
 
-    // Step 3: No match found
-    console.log(`  → No existing company found (will create new)`);
-    return { company: null, matchType: 'none' };
+  // Step 3: No match found
+  console.log(`  → No existing company found (will create new)`);
+  return { company: null, matchType: 'none' };
 }
 
-// ============ SYNC LOGIC ============
 // ============ SYNC LOGIC ============
 async function syncARData() {
-    console.log('Starting AR sync:', new Date().toISOString());
+  console.log('Starting AR sync:', new Date().toISOString());
 
-    // Get AR data from NetSuite
-    console.log('Fetching AR data from NetSuite...');
-    const arData = await getARData();
-    console.log(`Found ${arData.length} customers with AR balances`);
+  // Get AR data from NetSuite
+  console.log('Fetching AR data from NetSuite...');
+  const arData = await getARData();
+  console.log(`Found ${arData.length} customers with AR balances`);
 
-    let updated = 0;
-    let created = 0;
-    let errors = 0;
+  let updated = 0;
+  let created = 0;
+  let errors = 0;
+  const errorDetails = [];
 
-    for (const customer of arData) {
-          try {
-                  console.log(`\nProcessing: ${customer.customer_name} (NS ID: ${customer.customer_id})`);
+  for (const customer of arData) {
+    try {
+      console.log(`\nProcessing: ${customer.customer_name} (NS ID: ${customer.customer_id})`);
 
-                  // Find existing company with intelligent fallback
-                  const { company, matchType } = await findExistingCompany(
-                            customer.customer_id, 
-                            customer.customer_name
-                          );
+      // Find existing company with intelligent fallback
+      const { company, matchType } = await findExistingCompany(
+        customer.customer_id,
+        customer.customer_name
+      );
 
-                  const properties = {
-                            netsuite_customer_id: customer.customer_id.toString(),
-                            netsuite_legal_name: customer.customer_name,
-                            total_ar_balance: Math.round(customer.total_ar_balance * 100) / 100,
-                            past_due_amount: Math.round(customer.past_due_amount * 100) / 100
-                  };
+      const properties = {
+        netsuite_customer_id: customer.customer_id.toString(),
+        netsuite_legal_name: customer.customer_name,
+        total_ar_balance: Math.round(customer.total_ar_balance * 100) / 100,
+        past_due_amount: Math.round(customer.past_due_amount * 100) / 100
+      };
 
-                  if (company) {
-                            // UPDATE existing company
-                            await updateCompany(company.id, properties);
-                            console.log(`  ✓ UPDATED (${matchType}): AR Balance: $${customer.total_ar_balance}`);
-                            updated++;
-                  } else {
-                            // CREATE new company
-                            properties.name = customer.customer_name;
-                            const newCompany = await createCompany(properties);
-                            console.log(`  ✓ CREATED: New HubSpot ID ${newCompany.id} - AR Balance: $${customer.total_ar_balance}`);
-                            created++;
-                  }
+      if (company) {
+        // UPDATE existing company
+        await updateCompany(company.id, properties);
+        console.log(`  ✓ UPDATED (${matchType}): AR Balance: $${customer.total_ar_balance}`);
+        updated++;
+      } else {
+        // CREATE new company
+        properties.name = customer.customer_name;
+        const newCompany = await createCompany(properties);
+        console.log(`  ✓ CREATED: New HubSpot ID ${newCompany.id} - AR Balance: $${customer.total_ar_balance}`);
+        created++;
+      }
 
-                  // Rate limit delay
-                  await new Promise(r => setTimeout(r, 100));
-          } catch (err) {
-                  console.error(`  ✗ ERROR processing ${customer.customer_name}:`, err.message);
-                  errors++;
-          }
+      // Rate limit delay
+      await new Promise(r => setTimeout(r, 100));
+    } catch (err) {
+      console.error(`  ✗ ERROR processing ${customer.customer_name}:`, err.message);
+      errors++;
+      errorDetails.push({
+        customer: customer.customer_name,
+        customerId: customer.customer_id,
+        error: err.message
+      });
     }
+  }
 
-    console.log('\n=== Sync Complete ===');
-    console.log(`Updated: ${updated}`);
-    console.log(`Created: ${created}`);
-    console.log(`Errors: ${errors}`);
-    return { updated, created, errors };
+  console.log('\n=== Sync Complete ===');
+  console.log(`Updated: ${updated}`);
+  console.log(`Created: ${created}`);
+  console.log(`Errors: ${errors}`);
+
+  if (errorDetails.length > 0) {
+    console.log('\nError Details:');
+    errorDetails.forEach(e => console.log(`  - ${e.customer}: ${e.error}`));
+  }
+
+  return { updated, created, errors, errorDetails };
 }
 
 // ============ WEB SERVER FOR RENDER ============
-import http from 'http';
-
 const server = http.createServer(async (req, res) => {
   if (req.url === '/sync' && req.method === 'POST') {
     try {
@@ -446,7 +412,6 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Run sync on startup if SYNC_ON_START is set
 if (process.env.SYNC_ON_START === 'true') {
   syncARData().catch(console.error);
 }
